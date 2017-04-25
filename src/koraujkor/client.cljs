@@ -109,7 +109,7 @@
     }, {
         :type "pie"
         :data data*
-        :center [400, (if (seq data') 480 240)]
+        :center [400, (if (seq data') 440 220)]
         :size (if (seq data') 240 360)
         :innerSize (if (seq data') 60 90)
         :shadow true

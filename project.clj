@@ -1,5 +1,6 @@
 (defproject koraujkor "x.y.z"
     :dependencies [[org.clojure/clojure "1.8.0"]
+                   [org.clojure/core.async "0.2.374"]
                  #_[org.clojure/core.match "0.3.0-alpha4"]
                  #_[org.clojure/data.int-map "0.2.2"]
                  #_[org.clojure/data.xml "0.0.8"]
@@ -36,4 +37,5 @@
                :server-port 9210
                :css-dirs ["resources/public/css"]
                :nrepl-port 9389
+               :ring-handler koraujkor.server/servlet
                :server-logfile "log/figwheel_server.log"})
