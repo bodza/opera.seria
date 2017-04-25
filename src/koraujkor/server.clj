@@ -1,14 +1,24 @@
-(ns eruditio.data
-    (:require [clojure.core.match :refer [match]]
-              [clojure.data.int-map :as im]
+(ns koraujkor.server
+    (:require #_[clojure.core.match :refer [match]]
+            #_[clojure.data.int-map :as im]
               [clojure.data.xml :as xml]
               [clojure.data.xml.event :refer [event-exit? event-node]]
               [clojure.data.xml.jvm.parse :refer [string-source]]
               [clojure.data.xml.tree :refer [seq-tree]]
               [clojure.edn :as edn]
               [clojure.java.io :as io]
-              [clojure.repl :refer [source]])
-    (:import [java.io PushbackReader]
+              [clojure.repl :refer [source]]
+              [clojure.set :as set]
+              [cognitect.transit :as transit]
+            #_[hiccup.core :refer [html]]
+              [ring.adapter.jetty :refer [run-jetty]]
+              [ring.middleware.params :refer [wrap-params]]
+              [ring.middleware.resource :refer [wrap-resource]]
+              [ring.middleware.content-type :refer [wrap-content-type]]
+              [ring.middleware.not-modified :refer [wrap-not-modified]]
+              [ring.util.request :refer [path-info]]
+              [ring.util.response :refer [response not-found content-type charset]])
+    (:import [java.io ByteArrayOutputStream PushbackReader]
              [clojure.data.xml.event StartElementEvent]))
 
 (defn gc [n]
@@ -123,6 +133,8 @@
 
 (defn verso [f m]
     (persistent! (reduce (fn [m' [k v]] (if-let [k' (f k)] (assoc! m' v k') m')) (transient (empty m)) m)))
+(defn verso* [g m]
+    (persistent! (reduce (fn [m' [k v]] (assoc! m' v (conj (get m' v #{}) k))) (transient (empty m)) (g m))))
 
 (defn- chord [c]
     (case c \space :'s \newline :'n (keyword (let [x (int c)] (format (if (< x 0x100) "'%02x" "'%04x") x)))))
@@ -144,9 +156,15 @@
             {:pages (as-> (verso #(when (vector? %) %) @m) v (assoc v r (v w)) (dissoc v w))
              :words (verso #(when (string? %) {}) @m)})))
 
-(defonce -monok (delay (rhz-make (xml-parse (io/reader (io/resource "eruditio/data/monok.xml")) true))))
+(defonce -monok (delay (rhz-make (xml-parse (io/reader (io/resource "koraujkor/data/monok.xml")) true))))
 
-(defonce monok (delay {:pages (edn-read "monok/pages.edn") :words (edn-read "monok/words.edn")}))
+(defn- span-x [pages words]
+    (verso* #(for [[k v] % w v :when (words w)] [k w]) pages))
+(defn- page-x [pages words]
+    (verso* #(for [[k [t]] % :when (= t :.p) w (tree-seq pages pages k) :when (words w)] [k w]) pages))
+
+(defonce monok (delay (let [pages (edn-read "monok/pages.edn") words (edn-read "monok/words.edn")]
+    {:pages pages :words words :index (page-x pages words)})))
 
 (defn rhz-print [m]
     (assert (map? m) (str "unexpected " (type m)))
@@ -156,3 +174,25 @@
 
 (defn rhz-write [edn target & opts]
     (with-open [^java.io.Writer out (apply io/writer target opts)] (binding [*out* out] (rhz-print edn))))
+
+(defn- query [request]
+    (let [epoch (System/nanoTime)
+          p* (:pages @monok)
+          q* (map keyword (re-seq #"(?U)\p{Alnum}+" (get-in request [:params "q"] "")))
+          r* (map (:index @monok) q*)
+          s* (if (seq r*) (apply set/intersection r*) r*)
+          t* (frequencies (map #(get-in p* [(get-in p* [% 3]) 1 :.t]) s*))
+          elapsed (format "%.1f ms" (/ (double (- (System/nanoTime) epoch)) 1e6))]
+        {:q* q* :r* r* :t* t* :elapsed elapsed}))
+
+(defn- transit [request]
+    (let [baos (ByteArrayOutputStream. 4096) w (transit/writer baos :json) _ (transit/write w (query request))] (.toString baos "utf-8")))
+
+(defn- servlet' [request]
+    (if (= (path-info request) "/transit")
+        (-> (response (transit request)) (content-type "application/transit+json") (charset "utf-8"))
+        (-> (not-found "404 Not Found")  (content-type "text/plain")               (charset "utf-8"))))
+(def servlet
+    (-> servlet' (wrap-params) (wrap-resource "public") (wrap-content-type) (wrap-not-modified)))
+
+(defonce server (run-jetty #'servlet {:port 9802 :join? false}))
